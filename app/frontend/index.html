@@ -233,7 +233,7 @@
 
                         if (response.ok) {
                             this.triggerResult = await response.json();
-                            // Refresh jobs list
+                            // Refresh jobs list to show the new job
                             setTimeout(() => this.loadJobs(), 1000);
                         } else {
                             throw new Error(`HTTP ${response.status}`);
