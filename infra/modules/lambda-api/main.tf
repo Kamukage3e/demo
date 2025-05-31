@@ -121,7 +121,7 @@ resource "aws_api_gateway_deployment" "deployment" {
 
 output "api_url" {
   description = "Base URL for API Gateway stage"
-  value       = aws_api_gateway_deployment.deployment.invoke_url
+  value       = "https://${aws_api_gateway_rest_api.api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${var.stage}"
 }
 
 output "lambda_function_name" {
@@ -148,3 +148,6 @@ variable "stage" {
   description = "Deployment stage"
   type        = string
 }
+
+# Add data source to get current region
+data "aws_region" "current" {}
