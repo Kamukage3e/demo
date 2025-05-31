@@ -1,0 +1,337 @@
+name: GitOps Smart Deploy/Destroy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'infra/**'
+      - 'app/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+        - deploy
+        - destroy
+        - plan-only
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  TERRAFORM_VERSION: 1.10.0
+
+jobs:
+  analyze-commit:
+    runs-on: ubuntu-latest
+    outputs:
+      action: ${{ steps.determine-action.outputs.action }}
+      environment: ${{ steps.determine-action.outputs.environment }}
+      commit-msg: ${{ steps.determine-action.outputs.commit-msg }}
+      is-safe: ${{ steps.determine-action.outputs.is-safe }}
+    steps:
+    - uses: actions/checkout@v4.2.2
+      with:
+        fetch-depth: 2  # Get last 2 commits to compare
+    
+    - name: Determine Action from Commit Message
+      id: determine-action
+      run: |
+        # Get commit message
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          ACTION="${{ github.event.inputs.action }}"
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          COMMIT_MSG="Manual trigger: $ACTION on $ENVIRONMENT"
+        else
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s")
+          COMMIT_BODY=$(git log -1 --pretty=format:"%b")
+          
+          # Default values
+          ACTION="deploy"
+          ENVIRONMENT="dev"
+          
+          # Parse commit message for action keywords
+          if echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "\[destroy\]"; then
+            ACTION="destroy"
+          elif echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "\[plan\]"; then
+            ACTION="plan-only"
+          elif echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "\[deploy\]"; then
+            ACTION="deploy"
+          fi
+          
+          # Parse environment
+          if echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "prod\|production"; then
+            ENVIRONMENT="prod"
+          elif echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "stag\|staging"; then
+            ENVIRONMENT="staging"
+          else
+            ENVIRONMENT="dev"
+          fi
+        fi
+        
+        # Safety checks
+        IS_SAFE="true"
+        if [ "$ACTION" = "destroy" ]; then
+          # Additional safety for destroy
+          if [ "$ENVIRONMENT" = "prod" ]; then
+            IS_SAFE="false"  # Production destroy requires manual approval
+          fi
+          # Check for safety phrase in commit message
+          if ! echo "$COMMIT_MSG $COMMIT_BODY" | grep -i "CONFIRM_DESTROY"; then
+            IS_SAFE="false"
+          fi
+        fi
+        
+        echo "action=$ACTION" >> $GITHUB_OUTPUT
+        echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+        echo "commit-msg=$COMMIT_MSG" >> $GITHUB_OUTPUT
+        echo "is-safe=$IS_SAFE" >> $GITHUB_OUTPUT
+        
+        echo "## 🤖 GitOps Action Detected" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Action:** $ACTION" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** $ENVIRONMENT" >> $GITHUB_STEP_SUMMARY
+        echo "**Commit Message:** $COMMIT_MSG" >> $GITHUB_STEP_SUMMARY
+        echo "**Is Safe:** $IS_SAFE" >> $GITHUB_STEP_SUMMARY
+
+  build:
+    runs-on: ubuntu-latest
+    needs: analyze-commit
+    if: needs.analyze-commit.outputs.action != 'plan-only'
+    steps:
+    - uses: actions/checkout@v4.2.2
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Build Lambda function
+      run: |
+        cd app/lambda-jobs-api
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o bootstrap main.go
+        zip lambda.zip bootstrap
+    
+    - name: Upload Lambda artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: lambda-zip
+        path: app/lambda-jobs-api/lambda.zip
+
+  terraform-plan:
+    runs-on: ubuntu-latest
+    needs: [analyze-commit, build]
+    if: always() && needs.analyze-commit.outputs.action != 'skip'
+    steps:
+    - uses: actions/checkout@v4.2.2
+    
+    - name: Download Lambda artifact
+      if: needs.analyze-commit.outputs.action != 'plan-only'
+      uses: actions/download-artifact@v4
+      with:
+        name: lambda-zip
+        path: app/lambda-jobs-api/
+    
+    - name: Extract AWS region from tfvars
+      id: extract-region
+      run: |
+        REGION=$(grep '^region' infra/live/${{ needs.analyze-commit.outputs.environment }}/terraform.tfvars | cut -d'"' -f2)
+        echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+      working-directory: .
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ steps.extract-region.outputs.aws_region }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./infra/live/${{ needs.analyze-commit.outputs.environment }}
+    
+    - name: Terraform Plan
+      id: plan
+      run: |
+        if [ "${{ needs.analyze-commit.outputs.action }}" = "destroy" ]; then
+          terraform plan -destroy -no-color -out=plan
+          terraform show -no-color plan > plan.txt
+        else
+          terraform plan -no-color -out=plan
+          terraform show -no-color plan > plan.txt
+        fi
+      working-directory: ./infra/live/${{ needs.analyze-commit.outputs.environment }}
+    
+    - name: Upload Plan
+      uses: actions/upload-artifact@v4.6.2
+      with:
+        name: terraform-plan-${{ needs.analyze-commit.outputs.environment }}
+        path: |
+          infra/live/${{ needs.analyze-commit.outputs.environment }}/plan
+          infra/live/${{ needs.analyze-commit.outputs.environment }}/plan.txt
+    
+    - name: Comment Plan Summary
+      uses: actions/github-script@v7.0.1
+      with:
+        script: |
+          const fs = require('fs');
+          const plan = fs.readFileSync('infra/live/${{ needs.analyze-commit.outputs.environment }}/plan.txt', 'utf8');
+          const action = '${{ needs.analyze-commit.outputs.action }}';
+          const environment = '${{ needs.analyze-commit.outputs.environment }}';
+          const commitMsg = '${{ needs.analyze-commit.outputs.commit-msg }}';
+          
+          const emoji = action === 'destroy' ? '🚨' : action === 'deploy' ? '🚀' : '📋';
+          const actionText = action === 'destroy' ? 'DESTROY' : action === 'deploy' ? 'DEPLOY' : 'PLAN';
+          
+          const body = `## ${emoji} GitOps ${actionText} Plan - ${environment}
+          
+          **Triggered by:** ${commitMsg}
+          **Action:** ${actionText}
+          **Environment:** ${environment}
+          
+          ### Plan Output:
+          \`\`\`
+          ${plan.substring(0, 60000)}
+          \`\`\`
+          
+          ${action === 'destroy' ? '⚠️ **WARNING: This will DESTROY infrastructure!**' : ''}
+          `;
+          
+          // Create a commit status
+          await github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: context.sha,
+            state: 'pending',
+            description: `${actionText} plan ready for ${environment}`,
+            context: `gitops/${action}/${environment}`
+          });
+
+  terraform-apply:
+    runs-on: ubuntu-latest
+    needs: [analyze-commit, build, terraform-plan]
+    if: |
+      needs.analyze-commit.outputs.action == 'deploy' || 
+      (needs.analyze-commit.outputs.action == 'destroy' && needs.analyze-commit.outputs.is-safe == 'true')
+    environment: 
+      name: ${{ needs.analyze-commit.outputs.action }}-${{ needs.analyze-commit.outputs.environment }}
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+    - uses: actions/checkout@v4.2.2
+    
+    - name: Download Lambda artifact
+      if: needs.analyze-commit.outputs.action == 'deploy'
+      uses: actions/download-artifact@v4.3.0
+      with:
+        name: lambda-zip
+        path: app/lambda-jobs-api/
+    
+    - name: Download Plan
+      uses: actions/download-artifact@v4.3.0
+      with:
+        name: terraform-plan-${{ needs.analyze-commit.outputs.environment }}
+        path: infra/live/${{ needs.analyze-commit.outputs.environment }}/
+    
+    - name: Extract AWS region from tfvars
+      id: extract-region
+      run: |
+        REGION=$(grep '^region' infra/live/${{ needs.analyze-commit.outputs.environment }}/terraform.tfvars | cut -d'"' -f2)
+        echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+      working-directory: .
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4.2.1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ steps.extract-region.outputs.aws_region }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3.1.2
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./infra/live/${{ needs.analyze-commit.outputs.environment }}
+    
+    - name: Final Safety Check for Destroy
+      if: needs.analyze-commit.outputs.action == 'destroy'
+      run: |
+        echo "🚨 FINAL SAFETY CHECK 🚨"
+        echo "About to DESTROY infrastructure in ${{ needs.analyze-commit.outputs.environment }}"
+        echo "Commit message: ${{ needs.analyze-commit.outputs.commit-msg }}"
+        echo "This action is IRREVERSIBLE!"
+        sleep 10  # Give time to cancel if needed
+    
+    - name: Terraform Apply
+      run: terraform apply -auto-approve plan
+      working-directory: ./infra/live/${{ needs.analyze-commit.outputs.environment }}
+    
+    - name: Update Commit Status
+      if: always()
+      uses: actions/github-script@v7.0.1
+      with:
+        script: |
+          const action = '${{ needs.analyze-commit.outputs.action }}';
+          const environment = '${{ needs.analyze-commit.outputs.environment }}';
+          const success = '${{ job.status }}' === 'success';
+          
+          await github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: context.sha,
+            state: success ? 'success' : 'failure',
+            description: `${action} ${success ? 'completed' : 'failed'} for ${environment}`,
+            context: `gitops/${action}/${environment}`
+          });
+    
+    - name: Output Summary
+      if: needs.analyze-commit.outputs.action == 'deploy'
+      run: terraform output -json > outputs.json && cat outputs.json
+      working-directory: ./infra/live/${{ needs.analyze-commit.outputs.environment }}
+    
+    - name: Upload Outputs
+      if: needs.analyze-commit.outputs.action == 'deploy'
+      uses: actions/upload-artifact@v4.3.0  
+      with:
+        name: terraform-outputs-${{ needs.analyze-commit.outputs.environment }}
+        path: infra/live/${{ needs.analyze-commit.outputs.environment }}/outputs.json
+
+  terraform-unsafe-destroy:
+    runs-on: ubuntu-latest
+    needs: [analyze-commit, terraform-plan]
+    if: |
+      needs.analyze-commit.outputs.action == 'destroy' && 
+      needs.analyze-commit.outputs.is-safe == 'false'
+    environment: 
+      name: unsafe-destroy-${{ needs.analyze-commit.outputs.environment }}
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+    - name: Manual Approval Required
+      run: |
+        echo "🚨 UNSAFE DESTROY OPERATION DETECTED 🚨"
+        echo ""
+        echo "This destroy operation requires manual approval because:"
+        echo "- Environment: ${{ needs.analyze-commit.outputs.environment }}"
+        echo "- Missing CONFIRM_DESTROY in commit message"
+        echo "- Or attempting to destroy production"
+        echo ""
+        echo "To proceed, an authorized user must approve this deployment in GitHub."
+        echo "Alternatively, update your commit message to include 'CONFIRM_DESTROY'."
+        exit 1 

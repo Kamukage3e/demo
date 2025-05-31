@@ -203,24 +203,70 @@ ssh -i ~/.ssh/your-key.pem ubuntu@<ec2-ip>
 
 ## 🔄 GitOps Workflow
 
-The project includes three GitHub Actions workflows following [HashiCorp's best practices](https://developer.hashicorp.com/terraform/tutorials/automation/github-actions):
+The project includes four GitHub Actions workflows following [HashiCorp's best practices](https://developer.hashicorp.com/terraform/tutorials/automation/github-actions):
 
-### 1. **Deploy Workflow** (`.github/workflows/deploy.yml`)
-- **Trigger**: Push to `main` branch, Pull Requests, Manual dispatch
+### 1. **Smart GitOps Workflow** (`.github/workflows/gitops-smart.yml`) 🆕
+- **Trigger**: Push to `main` branch, Manual dispatch
+- **Key Feature**: **Commit message driven automation!**
+- **How it works**: Analyzes commit messages to determine what action to take
+
+**Commit Message Conventions:**
+```bash
+# Deploy to dev (default)
+git commit -m "feat: add new Lambda endpoint"
+
+# Deploy to specific environment
+git commit -m "feat: add metrics [deploy] to staging"
+
+# Plan only (no apply)
+git commit -m "test: update configuration [plan]"
+
+# Destroy (requires CONFIRM_DESTROY for safety)
+git commit -m "[destroy] remove test resources CONFIRM_DESTROY"
+
+# Destroy production (requires manual approval even with CONFIRM_DESTROY)
+git commit -m "[destroy] cleanup prod resources CONFIRM_DESTROY"
+```
+
+**Safety Features:**
+- **Safe destroys**: Require `CONFIRM_DESTROY` in commit message
+- **Production protection**: Production destroys always require manual approval
+- **Environment detection**: Automatically detects target environment from commit message
+- **Commit status**: Updates GitHub commit status with deployment results
+
+**Examples:**
+```bash
+# ✅ Deploy new feature to dev
+git commit -m "feat: add job scheduling feature"
+
+# ✅ Deploy to staging
+git commit -m "feat: update API endpoints for staging"
+
+# ✅ Safe destroy in dev
+git commit -m "[destroy] remove old test resources CONFIRM_DESTROY"
+
+# ⚠️ Production destroy (requires approval)
+git commit -m "[destroy] cleanup prod CONFIRM_DESTROY"
+
+# 📋 Plan only
+git commit -m "test: infrastructure changes [plan]"
+```
+
+### 2. **Manual Deploy Workflow** (`.github/workflows/deploy.yml`)
+- **Trigger**: Pull Requests (plan only), Manual dispatch
+- **Purpose**: Manual infrastructure operations and PR previews
 - **Features**:
-  - Builds Go Lambda function with static compilation
-  - Runs `terraform plan` on all changes
-  - Comments plan output on Pull Requests
-  - Requires manual approval for apply (production environment protection)
-  - Uploads outputs and artifacts
+  - Shows Terraform plan on Pull Requests
+  - Manual deployment with environment selection
+  - Choice between plan-only or apply
+  - Useful for testing and custom operations
 
-**Workflow Steps:**
-1. **Pull Request**: Creates a PR with Terraform plan
-2. **Review**: Team reviews infrastructure changes in PR comments
-3. **Merge**: Merging to main requires manual approval for apply
-4. **Deploy**: GitHub Actions applies changes automatically after approval
+**Usage:**
+- **PR Reviews**: Automatically shows plan when PRs modify infrastructure
+- **Manual Deployment**: Go to Actions → Manual Deploy Infrastructure
+- **Custom Operations**: Select environment and action (plan/apply)
 
-### 2. **Destroy Workflow** (`.github/workflows/destroy.yml`)
+### 3. **Destroy Workflow** (`.github/workflows/destroy.yml`)
 - **Trigger**: Manual dispatch only
 - **Safety Features**:
   - Requires typing "destroy" to confirm
@@ -229,24 +275,13 @@ The project includes three GitHub Actions workflows following [HashiCorp's best 
   - Requires manual approval via GitHub Environment protection
   - Creates detailed destruction summary
 
-**Usage:**
-1. Go to Actions → Destroy Infrastructure
-2. Select environment and type "destroy" to confirm
-3. Review the destroy plan
-4. Approve the destruction (if authorized)
-
-### 3. **Drift Detection Workflow** (`.github/workflows/drift-detection.yml`)
+### 4. **Drift Detection Workflow** (`.github/workflows/drift-detection.yml`)
 - **Trigger**: Scheduled (weekdays at 6 AM UTC) + Manual dispatch
 - **Features**:
   - Detects infrastructure drift across environments
   - Creates GitHub Issues when drift is detected
   - Provides actionable remediation steps
   - Runs on multiple environments via matrix strategy
-
-**Automated Monitoring:**
-- Runs daily drift detection
-- Creates issues with drift details
-- Provides links to fix drift automatically
 
 ### Environment Protection
 
@@ -322,3 +357,18 @@ terraform destroy -auto-approve
 ---
 
 **Built with ❤️ for demonstrating modern GitOps practices**
+
+## 🚀 Quick Start with Smart GitOps
+
+The easiest way to use this project is with the **Smart GitOps workflow** that automatically detects your intent from commit messages:
+
+### **Automatic Workflow Selection**
+
+| Commit Message | Workflow Used | Result |
+|----------------|---------------|--------|
+| `feat: add new feature` | Smart GitOps | 🚀 Deploy to dev |
+| `feat: update API for staging` | Smart GitOps | 🚀 Deploy to staging |
+| `test: infrastructure changes [plan]` | Smart GitOps | 📋 Plan only |
+| `[destroy] remove resources CONFIRM_DESTROY` | Smart GitOps | 🚨 Safe destroy |
+| `PR with infra changes` | Manual Deploy | 📋 Plan comment on PR |
+| Manual Actions button | Manual Deploy | 🔧 Custom operations |
