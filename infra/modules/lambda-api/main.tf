@@ -24,7 +24,7 @@ resource "aws_lambda_function" "lambda" {
   handler          = var.lambda_handler
   runtime          = "provided.al2023"
   role             = aws_iam_role.lambda_exec.arn
-  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  source_code_hash = try(filebase64sha256(var.lambda_zip_path), "")
   timeout          = 30
 
   environment {
