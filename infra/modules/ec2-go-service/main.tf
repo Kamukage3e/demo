@@ -65,7 +65,7 @@ resource "aws_instance" "ec2" {
   ami                         = var.ami_id
   instance_type               = var.instance_type
   vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
-  key_name                    = var.key_name != "gitops-demo-key" ? var.key_name : null
+  key_name                    = var.key_name != "gitops-demo-key" && var.key_name != "" ? var.key_name : null
   user_data                   = var.user_data
   associate_public_ip_address = true
   subnet_id                   = data.aws_subnets.default.ids[0]
