@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitOps Demo - Internal Developer Portal</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+    <div x-data="developerPortal()" class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800">Internal Developer Portal</h1>
+                    <p class="text-gray-600 mt-2">GitOps Demo - Manage your development workflow</p>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="text-right">
+                        <div class="text-sm text-gray-500">Environment</div>
+                        <div class="font-semibold text-blue-600">Development</div>
+                    </div>
+                    <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse" title="System Online"></div>
+                </div>
+            </div>
+        </header>
+
+        <!-- API Status -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+            <h2 class="text-xl font-semibold mb-4">API Status</h2>
+            <div class="flex items-center justify-between">
+                <div>
+                    <span class="text-sm text-gray-500">Lambda API Endpoint:</span>
+                    <div class="font-mono text-sm bg-gray-100 p-2 rounded mt-1" x-text="apiUrl || 'Configure API URL'">
+                    </div>
+                </div>
+                <button @click="checkApiHealth()"
+                    class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-colors"
+                    :disabled="loading">
+                    <span x-show="!loading">Check Health</span>
+                    <span x-show="loading">Checking...</span>
+                </button>
+            </div>
+            <div x-show="apiStatus" class="mt-4 p-3 rounded-lg"
+                :class="apiStatus.healthy ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'">
+                <div class="font-semibold" x-text="apiStatus.healthy ? 'API is healthy!' : 'API is not responding'">
+                </div>
+                <div class="text-sm mt-1" x-text="apiStatus.message"></div>
+            </div>
+        </div>
+
+        <!-- Job Management -->
+        <div class="grid md:grid-cols-2 gap-8 mb-8">
+            <!-- Trigger Jobs -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-semibold mb-4">Trigger Background Jobs</h2>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Job Type</label>
+                        <select x-model="selectedJobType"
+                            class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="ci">CI Pipeline</option>
+                            <option value="backup">Database Backup</option>
+                            <option value="deployment">Deployment</option>
+                            <option value="security-scan">Security Scan</option>
+                            <option value="cleanup">Resource Cleanup</option>
+                        </select>
+                    </div>
+                    <button @click="triggerJob()"
+                        class="w-full bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded-lg transition-colors"
+                        :disabled="loading || !apiUrl">
+                        <span x-show="!loading">Trigger Job</span>
+                        <span x-show="loading">Triggering...</span>
+                    </button>
+                </div>
+
+                <!-- Recent Trigger Results -->
+                <div x-show="triggerResult" class="mt-4 p-3 bg-blue-100 text-blue-800 rounded-lg">
+                    <div class="font-semibold">Job Triggered Successfully!</div>
+                    <div class="text-sm mt-1">
+                        <div>Job ID: <span x-text="triggerResult?.job_id"></span></div>
+                        <div>Type: <span x-text="triggerResult?.job_type"></span></div>
+                        <div>Status: <span x-text="triggerResult?.status"></span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Job History -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xl font-semibold">Job History</h2>
+                    <button @click="loadJobs()"
+                        class="bg-gray-500 hover:bg-gray-600 text-white px-3 py-1 rounded text-sm transition-colors"
+                        :disabled="loading">
+                        Refresh
+                    </button>
+                </div>
+                <div x-show="jobs.length === 0 && !loading" class="text-gray-500 text-center py-4">
+                    No jobs loaded. Click refresh to load jobs.
+                </div>
+                <div class="space-y-3">
+                    <template x-for="job in jobs" :key="job.job_id">
+                        <div class="border border-gray-200 rounded-lg p-3">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="font-medium" x-text="job.job_id"></span>
+                                <span class="px-2 py-1 rounded text-xs" :class="{
+                                          'bg-green-100 text-green-800': job.status === 'completed',
+                                          'bg-yellow-100 text-yellow-800': job.status === 'running',
+                                          'bg-gray-100 text-gray-800': job.status === 'triggered'
+                                      }" x-text="job.status">
+                                </span>
+                            </div>
+                            <div class="text-sm text-gray-600" x-text="job.message"></div>
+                            <div class="text-xs text-gray-400 mt-1">
+                                Type: <span x-text="job.job_type"></span> |
+                                <span x-text="new Date(job.timestamp).toLocaleString()"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4">Configuration</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Lambda API URL</label>
+                    <input type="url" x-model="apiUrl" @input="saveConfig()"
+                        placeholder="https://your-api-gateway-url/dev"
+                        class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <p class="text-xs text-gray-500 mt-1">Enter your API Gateway URL from Terraform output</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">EC2 Instance IP</label>
+                    <input type="text" x-model="ec2Ip" @input="saveConfig()" placeholder="xxx.xxx.xxx.xxx"
+                        class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    <p class="text-xs text-gray-500 mt-1">EC2 public IP from Terraform output</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="text-center text-gray-500 text-sm mt-8">
+            GitOps Demo - Internal Developer Portal | Powered by AWS Lambda, EC2, and S3
+        </footer>
+    </div>
+
+    <script>
+        function developerPortal() {
+            return {
+                apiUrl: localStorage.getItem('apiUrl') || '',
+                ec2Ip: localStorage.getItem('ec2Ip') || '',
+                jobs: [],
+                apiStatus: null,
+                triggerResult: null,
+                selectedJobType: 'ci',
+                loading: false,
+
+                async checkApiHealth() {
+                    if (!this.apiUrl) {
+                        alert('Please configure the API URL first');
+                        return;
+                    }
+
+                    this.loading = true;
+                    this.apiStatus = null;
+
+                    try {
+                        const response = await fetch(`${this.apiUrl}/health`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.apiStatus = {
+                                healthy: true,
+                                message: `Service: ${data.service} | Environment: ${data.environment}`
+                            };
+                        } else {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                    } catch (error) {
+                        this.apiStatus = {
+                            healthy: false,
+                            message: `Error: ${error.message}`
+                        };
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async loadJobs() {
+                    if (!this.apiUrl) {
+                        alert('Please configure the API URL first');
+                        return;
+                    }
+
+                    this.loading = true;
+
+                    try {
+                        const response = await fetch(`${this.apiUrl}/jobs`);
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.jobs = data.jobs || [];
+                        } else {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                    } catch (error) {
+                        alert(`Failed to load jobs: ${error.message}`);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                async triggerJob() {
+                    if (!this.apiUrl) {
+                        alert('Please configure the API URL first');
+                        return;
+                    }
+
+                    this.loading = true;
+                    this.triggerResult = null;
+
+                    try {
+                        const response = await fetch(`${this.apiUrl}/jobs/trigger?type=${this.selectedJobType}`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            }
+                        });
+
+                        if (response.ok) {
+                            this.triggerResult = await response.json();
+                            // Refresh jobs list
+                            setTimeout(() => this.loadJobs(), 1000);
+                        } else {
+                            throw new Error(`HTTP ${response.status}`);
+                        }
+                    } catch (error) {
+                        alert(`Failed to trigger job: ${error.message}`);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                saveConfig() {
+                    localStorage.setItem('apiUrl', this.apiUrl);
+                    localStorage.setItem('ec2Ip', this.ec2Ip);
+                },
+
+                init() {
+                    // Auto-check API health if URL is configured
+                    if (this.apiUrl) {
+                        this.checkApiHealth();
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+
+</html>
