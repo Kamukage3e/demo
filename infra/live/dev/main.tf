@@ -13,8 +13,8 @@ terraform {
     bucket       = "subinclabs-demo"
     key          = "dev/terraform.tfstate"
     region       = "eu-north-1"
-    encrypt        = true
-    use_lockfile   = true
+    encrypt      = true
+    use_lockfile = true
   }
 }
 
@@ -99,7 +99,7 @@ module "lambda_api" {
 
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"]
+  owners      = ["099720109477"] # Canonical
 
   filter {
     name   = "name"
@@ -109,6 +109,21 @@ data "aws_ami" "ubuntu" {
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
+
+# Debug output to verify AMI selection
+output "selected_ami" {
+  description = "Selected Ubuntu AMI"
+  value = {
+    id           = data.aws_ami.ubuntu.id
+    name         = data.aws_ami.ubuntu.name
+    architecture = data.aws_ami.ubuntu.architecture
   }
 }
 
