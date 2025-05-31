@@ -175,13 +175,91 @@ curl -X POST "https://your-api-gateway-url/dev/jobs/trigger?type=ci"
 ssh -i ~/.ssh/your-key.pem ubuntu@<ec2-ip>
 ```
 
+### Manual Testing Workflows
+
+1. **Test Deploy Workflow**:
+   ```bash
+   # Create a feature branch
+   git checkout -b test-feature
+   
+   # Make a small change
+   echo "# Test change" >> infra/live/dev/terraform.tfvars
+   
+   # Push and create PR
+   git add . && git commit -m "Test infrastructure change"
+   git push origin test-feature
+   ```
+
+2. **Test Destroy Workflow**:
+   - Navigate to Actions → Destroy Infrastructure
+   - Select "dev" environment
+   - Type "destroy" to confirm
+   - Review and approve the destruction
+
+3. **Test Drift Detection**:
+   - Navigate to Actions → Infrastructure Drift Detection
+   - Click "Run workflow"
+   - Review the drift detection results
+
 ## 🔄 GitOps Workflow
 
-1. **Code Changes**: Developers push to feature branches
-2. **Pull Request**: Creates a PR with Terraform plan
-3. **Review**: Team reviews infrastructure changes
-4. **Merge**: Merging to main triggers deployment
-5. **Deploy**: GitHub Actions applies changes automatically
+The project includes three GitHub Actions workflows following [HashiCorp's best practices](https://developer.hashicorp.com/terraform/tutorials/automation/github-actions):
+
+### 1. **Deploy Workflow** (`.github/workflows/deploy.yml`)
+- **Trigger**: Push to `main` branch, Pull Requests, Manual dispatch
+- **Features**:
+  - Builds Go Lambda function with static compilation
+  - Runs `terraform plan` on all changes
+  - Comments plan output on Pull Requests
+  - Requires manual approval for apply (production environment protection)
+  - Uploads outputs and artifacts
+
+**Workflow Steps:**
+1. **Pull Request**: Creates a PR with Terraform plan
+2. **Review**: Team reviews infrastructure changes in PR comments
+3. **Merge**: Merging to main requires manual approval for apply
+4. **Deploy**: GitHub Actions applies changes automatically after approval
+
+### 2. **Destroy Workflow** (`.github/workflows/destroy.yml`)
+- **Trigger**: Manual dispatch only
+- **Safety Features**:
+  - Requires typing "destroy" to confirm
+  - Environment selection (dev/staging/prod)
+  - Shows destroy plan before execution
+  - Requires manual approval via GitHub Environment protection
+  - Creates detailed destruction summary
+
+**Usage:**
+1. Go to Actions → Destroy Infrastructure
+2. Select environment and type "destroy" to confirm
+3. Review the destroy plan
+4. Approve the destruction (if authorized)
+
+### 3. **Drift Detection Workflow** (`.github/workflows/drift-detection.yml`)
+- **Trigger**: Scheduled (weekdays at 6 AM UTC) + Manual dispatch
+- **Features**:
+  - Detects infrastructure drift across environments
+  - Creates GitHub Issues when drift is detected
+  - Provides actionable remediation steps
+  - Runs on multiple environments via matrix strategy
+
+**Automated Monitoring:**
+- Runs daily drift detection
+- Creates issues with drift details
+- Provides links to fix drift automatically
+
+### Environment Protection
+
+The workflows use GitHub Environment protection for safety:
+
+- **`production`**: Required for apply operations
+- **`destroy-{environment}`**: Required for destroy operations
+
+Set up environment protection in GitHub:
+1. Go to Settings → Environments
+2. Create `production` environment
+3. Add required reviewers
+4. Enable deployment branches (main only)
 
 ## 📁 Project Structure
 

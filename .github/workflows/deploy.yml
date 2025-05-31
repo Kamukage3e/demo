@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
 
 env:
   TERRAFORM_VERSION: 1.10.0
@@ -23,7 +24,7 @@ jobs:
     - name: Build Lambda function
       run: |
         cd app/lambda-jobs-api
-        GOOS=linux GOARCH=amd64 go build -o bootstrap main.go
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o bootstrap main.go
         zip lambda.zip bootstrap
     
     - name: Upload Lambda artifact
@@ -35,7 +36,6 @@ jobs:
   terraform-plan:
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'pull_request'
     steps:
     - uses: actions/checkout@v4
     
@@ -68,14 +68,79 @@ jobs:
       run: terraform init
       working-directory: ./infra/live/dev
     
-    - name: Terraform Plan
-      run: terraform plan
+    - name: Terraform Validate
+      run: terraform validate
       working-directory: ./infra/live/dev
+    
+    - name: Terraform Plan
+      id: plan
+      run: |
+        terraform plan -no-color -out=tfplan
+        terraform show -no-color tfplan > plan.txt
+      working-directory: ./infra/live/dev
+    
+    - name: Upload Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-plan
+        path: |
+          infra/live/dev/tfplan
+          infra/live/dev/plan.txt
+    
+    - name: Comment Plan on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const plan = fs.readFileSync('infra/live/dev/plan.txt', 'utf8');
+          const maxGitHubBodyCharacters = 65536;
+          
+          function chunkSubstr(str, size) {
+            const numChunks = Math.ceil(str.length / size)
+            const chunks = new Array(numChunks)
+            for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+              chunks[i] = str.substr(o, size)
+            }
+            return chunks
+          }
+          
+          const body = plan.length > maxGitHubBodyCharacters ? 
+            `\`\`\`\n${plan.substring(0, maxGitHubBodyCharacters)}\n\`\`\`\n\n*Plan output truncated due to size limits.*` : 
+            `\`\`\`\n${plan}\n\`\`\``;
+          
+          // Delete previous comments
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          
+          const botComment = comments.find(comment => {
+            return comment.user.type === 'Bot' && comment.body.includes('Terraform Plan')
+          });
+          
+          if (botComment) {
+            github.rest.issues.deleteComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+            });
+          }
+          
+          // Create new comment
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## Terraform Plan 📋\n\n${body}`
+          });
 
   terraform-apply:
     runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [build, terraform-plan]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    environment: production  # This will require manual approval
     steps:
     - uses: actions/checkout@v4
     
@@ -84,6 +149,12 @@ jobs:
       with:
         name: lambda-zip
         path: app/lambda-jobs-api/
+    
+    - name: Download Plan
+      uses: actions/download-artifact@v4
+      with:
+        name: terraform-plan
+        path: infra/live/dev/
     
     - name: Extract AWS region from tfvars
       id: extract-region
@@ -109,5 +180,15 @@ jobs:
       working-directory: ./infra/live/dev
     
     - name: Terraform Apply
-      run: terraform apply -auto-approve
+      run: terraform apply -auto-approve tfplan
       working-directory: ./infra/live/dev
+    
+    - name: Output Summary
+      run: terraform output -json > outputs.json && cat outputs.json
+      working-directory: ./infra/live/dev
+    
+    - name: Upload Outputs
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-outputs
+        path: infra/live/dev/outputs.json

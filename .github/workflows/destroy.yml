@@ -1,0 +1,135 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      confirm_destroy:
+        description: 'Type "destroy" to confirm'
+        required: true
+        default: ''
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  TERRAFORM_VERSION: 1.10.0
+
+jobs:
+  destroy-plan:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm_destroy == 'destroy'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Extract AWS region from tfvars
+      id: extract-region
+      run: |
+        REGION=$(grep '^region' infra/live/${{ github.event.inputs.environment }}/terraform.tfvars | cut -d'"' -f2)
+        echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+      working-directory: .
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ steps.extract-region.outputs.aws_region }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./infra/live/${{ github.event.inputs.environment }}
+    
+    - name: Terraform Destroy Plan
+      id: destroy-plan
+      run: |
+        terraform plan -destroy -no-color -out=destroy-plan
+        terraform show -no-color destroy-plan > destroy-plan.txt
+      working-directory: ./infra/live/${{ github.event.inputs.environment }}
+    
+    - name: Upload Destroy Plan
+      uses: actions/upload-artifact@v4
+      with:
+        name: destroy-plan-${{ github.event.inputs.environment }}
+        path: |
+          infra/live/${{ github.event.inputs.environment }}/destroy-plan
+          infra/live/${{ github.event.inputs.environment }}/destroy-plan.txt
+    
+    - name: Display Destroy Plan Summary
+      run: |
+        echo "## 🚨 DESTROY PLAN SUMMARY 🚨" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Region:** ${{ steps.extract-region.outputs.aws_region }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Resources to be destroyed:" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat infra/live/${{ github.event.inputs.environment }}/destroy-plan.txt | grep -A 20 "will be destroyed" || echo "Plan output available in artifacts"
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+  destroy-apply:
+    runs-on: ubuntu-latest
+    needs: destroy-plan
+    if: github.event.inputs.confirm_destroy == 'destroy'
+    environment: 
+      name: destroy-${{ github.event.inputs.environment }}
+      url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Destroy Plan
+      uses: actions/download-artifact@v4
+      with:
+        name: destroy-plan-${{ github.event.inputs.environment }}
+        path: infra/live/${{ github.event.inputs.environment }}/
+    
+    - name: Extract AWS region from tfvars
+      id: extract-region
+      run: |
+        REGION=$(grep '^region' infra/live/${{ github.event.inputs.environment }}/terraform.tfvars | cut -d'"' -f2)
+        echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+      working-directory: .
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ steps.extract-region.outputs.aws_region }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./infra/live/${{ github.event.inputs.environment }}
+    
+    - name: Final Confirmation
+      run: |
+        echo "🚨 ABOUT TO DESTROY ALL RESOURCES IN ${{ github.event.inputs.environment }} ENVIRONMENT 🚨"
+        echo "This action is IRREVERSIBLE!"
+        echo "All data will be permanently lost!"
+    
+    - name: Terraform Destroy
+      run: terraform apply -auto-approve destroy-plan
+      working-directory: ./infra/live/${{ github.event.inputs.environment }}
+    
+    - name: Destruction Complete
+      run: |
+        echo "## ✅ DESTRUCTION COMPLETE" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Destroyed at:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "**Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY 

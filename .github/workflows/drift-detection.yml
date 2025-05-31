@@ -1,0 +1,145 @@
+name: Infrastructure Drift Detection
+
+on:
+  schedule:
+    - cron: '0 6 * * 1-5'  # Run at 6 AM UTC on weekdays
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  TERRAFORM_VERSION: 1.10.0
+
+jobs:
+  drift-detection:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev]  # Add more environments as needed
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Extract AWS region from tfvars
+      id: extract-region
+      run: |
+        REGION=$(grep '^region' infra/live/${{ matrix.environment }}/terraform.tfvars | cut -d'"' -f2)
+        echo "aws_region=$REGION" >> $GITHUB_OUTPUT
+      working-directory: .
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ steps.extract-region.outputs.aws_region }}
+    
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+    
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./infra/live/${{ matrix.environment }}
+    
+    - name: Terraform Plan (Drift Check)
+      id: plan
+      run: |
+        terraform plan -detailed-exitcode -no-color > plan-output.txt 2>&1
+        exit_code=$?
+        echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+        
+        if [ $exit_code -eq 0 ]; then
+          echo "drift_detected=false" >> $GITHUB_OUTPUT
+          echo "status=no-changes" >> $GITHUB_OUTPUT
+        elif [ $exit_code -eq 2 ]; then
+          echo "drift_detected=true" >> $GITHUB_OUTPUT  
+          echo "status=changes-detected" >> $GITHUB_OUTPUT
+        else
+          echo "drift_detected=error" >> $GITHUB_OUTPUT
+          echo "status=error" >> $GITHUB_OUTPUT
+        fi
+      working-directory: ./infra/live/${{ matrix.environment }}
+      continue-on-error: true
+    
+    - name: Upload Drift Report
+      if: steps.plan.outputs.drift_detected == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: drift-report-${{ matrix.environment }}
+        path: infra/live/${{ matrix.environment }}/plan-output.txt
+    
+    - name: Create Drift Issue
+      if: steps.plan.outputs.drift_detected == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const planOutput = fs.readFileSync('infra/live/${{ matrix.environment }}/plan-output.txt', 'utf8');
+          
+          const issueTitle = `🚨 Infrastructure Drift Detected - ${{ matrix.environment }} environment`;
+          const issueBody = `## Infrastructure Drift Detection Report
+          
+          **Environment:** ${{ matrix.environment }}
+          **Detection Date:** ${new Date().toISOString()}
+          **Run ID:** ${{ github.run_id }}
+          
+          ### Drift Details:
+          \`\`\`
+          ${planOutput.substring(0, 60000)}
+          \`\`\`
+          
+          ### Next Steps:
+          1. Review the changes detected above
+          2. Determine if these changes were intentional
+          3. If intentional, update the Terraform configuration to match
+          4. If not intentional, investigate why the infrastructure was modified
+          5. Run the deploy workflow to bring infrastructure back to the desired state
+          
+          ### Quick Actions:
+          - [View Full Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - [Deploy Infrastructure](${{ github.server_url }}/${{ github.repository }}/actions/workflows/deploy.yml)
+          `;
+          
+          // Check if there's already an open drift issue
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: 'infrastructure-drift,${{ matrix.environment }}'
+          });
+          
+          if (issues.length === 0) {
+            // Create new issue
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body: issueBody,
+              labels: ['infrastructure-drift', '${{ matrix.environment }}', 'urgent']
+            });
+          } else {
+            // Update existing issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issues[0].number,
+              body: `## New Drift Detection - ${new Date().toISOString()}\n\n${issueBody}`
+            });
+          }
+    
+    - name: Report Status
+      run: |
+        echo "## Drift Detection Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** ${{ steps.plan.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Drift Detected:** ${{ steps.plan.outputs.drift_detected }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.plan.outputs.drift_detected }}" == "true" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🚨 **Action Required:** Infrastructure drift has been detected!" >> $GITHUB_STEP_SUMMARY
+          echo "Please review the created issue and plan output." >> $GITHUB_STEP_SUMMARY
+        elif [ "${{ steps.plan.outputs.drift_detected }}" == "false" ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All Good:** No infrastructure drift detected." >> $GITHUB_STEP_SUMMARY
+        fi 
