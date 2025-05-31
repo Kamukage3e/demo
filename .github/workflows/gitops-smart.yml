@@ -28,7 +28,7 @@ on:
         - staging
         - prod
 
-# Required permissions for the workflow
+# Required permissions for the 
 permissions:
   contents: read           # To read the repository
   statuses: write         # To write commit statuses
