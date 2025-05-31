@@ -28,6 +28,13 @@ on:
         - staging
         - prod
 
+# Required permissions for the workflow
+permissions:
+  contents: read           # To read the repository
+  statuses: write         # To write commit statuses
+  pull-requests: write    # To comment on PRs (if needed)
+  actions: read          # To read other workflow runs
+
 env:
   TERRAFORM_VERSION: 1.10.0
 
@@ -212,15 +219,21 @@ jobs:
           ${action === 'destroy' ? '⚠️ **WARNING: This will DESTROY infrastructure!**' : ''}
           `;
           
-          // Create a commit status
-          await github.rest.repos.createCommitStatus({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            sha: context.sha,
-            state: 'pending',
-            description: `${actionText} plan ready for ${environment}`,
-            context: `gitops/${action}/${environment}`
-          });
+          // Try to create a commit status, but don't fail if it doesn't work
+          try {
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'pending',
+              description: `${actionText} plan ready for ${environment}`,
+              context: `gitops/${action}/${environment}`
+            });
+            console.log('Commit status updated successfully');
+          } catch (error) {
+            console.log('Could not update commit status:', error.message);
+            console.log('This is not critical - continuing with deployment');
+          }
 
   terraform-apply:
     runs-on: ubuntu-latest
@@ -292,14 +305,21 @@ jobs:
           const environment = '${{ needs.analyze-commit.outputs.environment }}';
           const success = '${{ job.status }}' === 'success';
           
-          await github.rest.repos.createCommitStatus({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            sha: context.sha,
-            state: success ? 'success' : 'failure',
-            description: `${action} ${success ? 'completed' : 'failed'} for ${environment}`,
-            context: `gitops/${action}/${environment}`
-          });
+          // Try to update commit status, but don't fail if it doesn't work
+          try {
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: success ? 'success' : 'failure',
+              description: `${action} ${success ? 'completed' : 'failed'} for ${environment}`,
+              context: `gitops/${action}/${environment}`
+            });
+            console.log('Final commit status updated successfully');
+          } catch (error) {
+            console.log('Could not update final commit status:', error.message);
+            console.log('This is not critical - deployment status available in Actions tab');
+          }
     
     - name: Output Summary
       if: needs.analyze-commit.outputs.action == 'deploy'
