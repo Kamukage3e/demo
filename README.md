@@ -215,7 +215,7 @@ The project includes four GitHub Actions workflows following [HashiCorp's best p
 # Deploy to dev (default)
 git commit -m "feat: add new Lambda endpoint"
 
-# Deploy to specific environment
+# Deploy to specific environment !!!
 git commit -m "feat: add metrics [deploy] to staging"
 
 # Plan only (no apply)
