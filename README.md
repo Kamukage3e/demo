@@ -212,7 +212,7 @@ The project includes four GitHub Actions workflows following [HashiCorp's best p
 
 **Commit Message Conventions:**
 ```bash
-# Deploy to dev (default)
+# Deploy to dev (default) !!
 git commit -m "feat: add new Lambda endpoint"
 
 # Deploy to specific environment !!!
