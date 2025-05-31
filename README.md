@@ -218,7 +218,7 @@ git commit -m "feat: add new Lambda endpoint"
 # Deploy to specific environment !!!!! 
 git commit -m "feat: add metrics [deploy] to staging"
 
-# Plan only (no apply)
+# Plan only (no apply)  !!
 git commit -m "test: update configuration [plan]"
 
 # Destroy (requires CONFIRM_DESTROY for safety)
