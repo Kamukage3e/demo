@@ -33,7 +33,7 @@ permissions:
   contents: read           # To read the repository
   statuses: write         # To write commit statuses
   pull-requests: write    # To comment on PRs (if needed)
-  actions: read          # To read other workflow runs !!
+  actions: read          # To read other workflow runs !!!
 
 env:
   TERRAFORM_VERSION: 1.10.0
