@@ -1,9 +1,9 @@
 name: Infrastructure Drift Detection
 
 on:
-  schedule:
-    - cron: '0 6 * * 1-5'  # Run at 6 AM UTC on weekdays
-  workflow_dispatch:  # Allow manual triggering
+  # schedule:
+  #   - cron: '0 6 * * 1-5'  # Run at 6 AM UTC on weekdays
+  # workflow_dispatch:  # Allow manual triggering
 
 env:
   TERRAFORM_VERSION: 1.10.0
